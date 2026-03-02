@@ -52,6 +52,10 @@ class DiscordChannel(BaseChannel):
         super().__init__(config, bus)
         self.client: Optional[discord.Client] = None
         self._ready_event = asyncio.Event()
+        self._streaming_messages: dict[str, discord.Message] = {}
+        self._streaming_last_content: dict[str, str] = {}
+        self._typing_tasks: dict[str, asyncio.Task] = {}
+        self._typing_targets: dict[str, discord.abc.Messageable] = {}
 
     async def start(self) -> None:
         """启动 Discord Bot。
@@ -140,6 +144,11 @@ class DiscordChannel(BaseChannel):
         if self.client:
             await self.client.close()
             self.client = None
+        for chat_id in list(self._typing_tasks):
+            self._stop_typing(chat_id)
+        self._streaming_messages.clear()
+        self._streaming_last_content.clear()
+        self._typing_targets.clear()
 
         logger.info(f"[{self.name}] Discord bot stopped")
 
@@ -158,6 +167,22 @@ class DiscordChannel(BaseChannel):
             logger.warning(f"[{self.name}] Client not ready, cannot send message")
             return
 
+        if msg.metadata.get("_streaming") or msg.metadata.get("_streaming_end"):
+            target = await self._get_send_target(msg.chat_id, msg.metadata)
+            if target is None:
+                logger.warning(f"[{self.name}] Cannot find target: {msg.chat_id}")
+                return
+            await self._handle_streaming_message(target, msg)
+            return
+        
+        # Discord 不允许发送空消息；流式结束包等可能出现空内容
+        content = (msg.content or "").strip()
+        has_embed = isinstance(msg.metadata.get("embed"), dict)
+        has_media = bool(msg.media or msg.metadata.get("media"))
+        if not content and not has_embed and not has_media:
+            logger.debug(f"[{self.name}] Skip empty outbound message for chat {msg.chat_id}")
+            return
+
         try:
             # 获取目标 (用户或频道)
             target = await self._get_send_target(msg.chat_id, msg.metadata)
@@ -171,10 +196,11 @@ class DiscordChannel(BaseChannel):
             # 发送消息 (处理分片)
             if embed:
                 # Embed 消息不支持分片，直接发送
-                await target.send(content=msg.content[:DISCORD_MAX_MESSAGE_LENGTH], embed=embed)
+                await target.send(content=content[:DISCORD_MAX_MESSAGE_LENGTH], embed=embed)
             else:
                 # 普通消息，支持分片
-                await self._send_chunked(target, msg.content)
+                await self._send_chunked(target, content)
+            self._stop_typing(str(msg.chat_id))
 
             logger.debug(f"[{self.name}] Message sent to {msg.chat_id}")
 
@@ -184,6 +210,41 @@ class DiscordChannel(BaseChannel):
             logger.error(f"[{self.name}] Target not found: {msg.chat_id}")
         except Exception as e:
             logger.error(f"[{self.name}] Failed to send message: {e}")
+            self._stop_typing(str(msg.chat_id))
+
+    async def _handle_streaming_message(
+        self,
+        target: discord.abc.Messageable,
+        msg: OutboundMessage,
+    ) -> None:
+        chat_id = str(msg.chat_id)
+
+        if msg.metadata.get("_streaming_end"):
+            self._streaming_messages.pop(chat_id, None)
+            self._streaming_last_content.pop(chat_id, None)
+            self._stop_typing(chat_id)
+            return
+
+        content = (msg.content or "").strip()
+        if not content:
+            return
+        self._start_typing(chat_id, target)
+
+        if self._streaming_last_content.get(chat_id) == content:
+            return
+
+        stream_message = self._streaming_messages.get(chat_id)
+        if stream_message is not None:
+            try:
+                await stream_message.edit(content=content[:DISCORD_MAX_MESSAGE_LENGTH])
+                self._streaming_last_content[chat_id] = content
+                return
+            except Exception:
+                self._streaming_messages.pop(chat_id, None)
+
+        sent = await target.send(content=content[:DISCORD_MAX_MESSAGE_LENGTH])
+        self._streaming_messages[chat_id] = sent
+        self._streaming_last_content[chat_id] = content
 
     async def _get_send_target(
         self, chat_id: str, metadata: dict[str, Any]
@@ -216,6 +277,13 @@ class DiscordChannel(BaseChannel):
             user = self.client.get_user(target_id)
             if user:
                 return user.dm_channel or await user.create_dm()
+            # 缓存未命中时走 API 拉取用户
+            try:
+                user = await self.client.fetch_user(target_id)
+                if user:
+                    return user.dm_channel or await user.create_dm()
+            except Exception:
+                pass
             # 尝试通过 ID 获取现有的 DM 频道
             channel = self.client.get_channel(target_id)
             if isinstance(channel, discord.DMChannel):
@@ -225,11 +293,24 @@ class DiscordChannel(BaseChannel):
             channel = self.client.get_channel(target_id)
             if isinstance(channel, discord.abc.Messageable):
                 return channel
+            # 缓存未命中时走 API 拉取频道
+            try:
+                fetched = await self.client.fetch_channel(target_id)
+                if isinstance(fetched, discord.abc.Messageable):
+                    return fetched
+            except Exception:
+                pass
 
             # 如果频道获取失败，尝试作为用户 ID 处理 (私聊)
             user = self.client.get_user(target_id)
             if user:
                 return user.dm_channel or await user.create_dm()
+            try:
+                user = await self.client.fetch_user(target_id)
+                if user:
+                    return user.dm_channel or await user.create_dm()
+            except Exception:
+                pass
 
         return None
 
@@ -388,6 +469,12 @@ class DiscordChannel(BaseChannel):
         else:
             chat_id = str(message.channel.id)  # 频道使用频道 ID
             is_dm = False
+        # 立即触发一次 typing，保证用户收到消息后立刻可见
+        try:
+            await message.channel.trigger_typing()
+        except Exception:
+            pass
+        self._start_typing(chat_id, message.channel)
 
         # 提取消息内容
         content = message.content or ""
@@ -426,3 +513,28 @@ class DiscordChannel(BaseChannel):
             media=media,
             metadata=metadata,
         )
+
+    def _start_typing(self, chat_id: str, target: discord.abc.Messageable) -> None:
+        existing = self._typing_tasks.get(chat_id)
+        if existing and not existing.done():
+            return
+        self._typing_targets[chat_id] = target
+
+        async def _loop() -> None:
+            while True:
+                try:
+                    current_target = self._typing_targets.get(chat_id, target)
+                    async with current_target.typing():
+                        await asyncio.sleep(8.0)
+                except asyncio.CancelledError:
+                    break
+                except Exception:
+                    await asyncio.sleep(2.0)
+
+        self._typing_tasks[chat_id] = asyncio.create_task(_loop())
+
+    def _stop_typing(self, chat_id: str) -> None:
+        task = self._typing_tasks.pop(chat_id, None)
+        self._typing_targets.pop(chat_id, None)
+        if task and not task.done():
+            task.cancel()
