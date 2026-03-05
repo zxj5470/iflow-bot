@@ -299,18 +299,8 @@ def ensure_iflow_ready() -> bool:
 
 def load_config():
     """加载配置。"""
-    from iflow_bot.config.schema import Config
-    config_path = get_config_path()
-    
-    if config_path.exists():
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return Config(**data)
-        except Exception as e:
-            console.print(f"[yellow]Warning: Invalid config file: {e}[/yellow]")
-    
-    return Config()
+    from iflow_bot.config.loader import load_config as _load_config
+    return _load_config(auto_create=False)
 
 
 def save_config(config) -> None:
@@ -1213,125 +1203,13 @@ def onboard(
 
     config_dir.mkdir(parents=True, exist_ok=True)
 
-    # 完整的默认配置模板
-    default_config = {
-        "driver": {
-            "mode": "stdio",
-            "acp_port": 8090,
-            "iflow_path": "iflow",
-            "model": "minimax-m2.5",
-            "yolo": True,
-            "thinking": False,
-            "max_turns": 40,
-            "timeout": 180,
-            "compression_trigger_tokens": 88888,
-            "workspace": str(Path.home() / ".iflow-bot" / "workspace"),
-            "extra_args": []
-        },
-        "channels": {
-            "telegram": {
-                "enabled": False,
-                "token": "",
-                "allow_from": []
-            },
-            "discord": {
-                "enabled": False,
-                "token": "",
-                "allow_from": []
-            },
-            "slack": {
-                "enabled": False,
-                "bot_token": "",
-                "app_token": "",
-                "allow_from": [],
-                "group_policy": "mention",
-                "group_allow_from": [],
-                "reply_in_thread": True,
-                "react_emoji": "eyes",
-                "dm": {
-                    "enabled": True,
-                    "policy": "open",
-                    "allow_from": []
-                }
-            },
-            "feishu": {
-                "enabled": False,
-                "app_id": "",
-                "app_secret": "",
-                "encrypt_key": "",
-                "verification_token": "",
-                "allow_from": []
-            },
-            "dingtalk": {
-                "enabled": False,
-                "client_id": "",
-                "client_secret": "",
-                "allow_from": []
-            },
-            "qq": {
-                "enabled": False,
-                "app_id": "",
-                "secret": "",
-                "allow_from": [],
-                "split_threshold": 3
-            },
-            "whatsapp": {
-                "enabled": False,
-                "bridge_url": "http://localhost:3001",
-                "bridge_token": "",
-                "allow_from": []
-            },
-            "email": {
-                "enabled": False,
-                "consent_granted": False,
-                "imap_host": "imap.gmail.com",
-                "imap_port": 993,
-                "imap_username": "",
-                "imap_password": "",
-                "imap_use_ssl": True,
-                "smtp_host": "smtp.gmail.com",
-                "smtp_port": 587,
-                "smtp_username": "",
-                "smtp_password": "",
-                "smtp_use_tls": True,
-                "from_address": "",
-                "allow_from": [],
-                "auto_reply_enabled": True,
-                "poll_interval_seconds": 30,
-                "max_body_chars": 10000,
-                "mark_seen": True,
-                "subject_prefix": "Re: "
-            },
-            "mochat": {
-                "enabled": False,
-                "base_url": "https://mochat.io",
-                "socket_url": "https://mochat.io",
-                "socket_path": "/socket.io",
-                "claw_token": "",
-                "agent_user_id": "",
-                "sessions": ["*"],
-                "panels": ["*"],
-                "watch_timeout_ms": 30000,
-                "watch_limit": 50,
-                "refresh_interval_ms": 60000,
-                "reply_delay_mode": "non-mention",
-                "reply_delay_ms": 120000,
-                "socket_connect_timeout_ms": 10000,
-                "socket_reconnect_delay_ms": 1000,
-                "socket_max_reconnect_delay_ms": 5000,
-                "max_retry_attempts": 5,
-                "retry_delay_ms": 5000
-            }
-        },
-        "log_level": "INFO",
-        "log_file": ""
-    }
-
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(default_config, f, indent=2, ensure_ascii=False)
+    # 使用 loader 模块中的统一函数创建默认配置
+    from iflow_bot.config.loader import _create_default_config
+    _create_default_config(config_path)
 
     # 初始化 workspace
-    workspace = Path(default_config["driver"]["workspace"])
+    from iflow_bot.config.loader import DEFAULT_TIMEOUT
+    workspace = Path.home() / ".iflow-bot" / "workspace"
     init_workspace(workspace)
 
     console.print()

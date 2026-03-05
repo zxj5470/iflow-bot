@@ -31,6 +31,8 @@ from typing import Any, Callable, Coroutine, Optional, Union
 
 from loguru import logger
 
+from iflow_bot.config.loader import DEFAULT_TIMEOUT
+
 try:
     import websockets
     WEBSOCKETS_AVAILABLE = True
@@ -134,7 +136,7 @@ class ACPClient:
         self,
         host: str = "localhost",
         port: int = 8090,
-        timeout: int = 300,
+        timeout: int = DEFAULT_TIMEOUT,
         workspace: Optional[Path] = None,
     ):
         """
@@ -757,7 +759,7 @@ class ACPAdapter:
         self,
         host: str = "localhost",
         port: int = 8090,
-        timeout: int = 300,
+        timeout: int = DEFAULT_TIMEOUT,
         workspace: Optional[Path] = None,
         default_model: str = "glm-5",
         thinking: bool = False,

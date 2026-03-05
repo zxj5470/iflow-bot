@@ -21,6 +21,8 @@ from typing import Any, Callable, Literal, Optional
 
 from loguru import logger
 
+from iflow_bot.config.loader import DEFAULT_TIMEOUT
+
 
 def _is_windows() -> bool:
     """检查是否为 Windows 平台。"""
@@ -108,7 +110,7 @@ class IFlowAdapter:
     def __init__(
         self,
         default_model: str = "glm-5",
-        timeout: int = 300,
+        timeout: int = DEFAULT_TIMEOUT,
         iflow_path: str = "iflow",
         workspace: Optional[Path] = None,
         thinking: bool = False,

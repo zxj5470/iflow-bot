@@ -32,6 +32,8 @@ from typing import Any, Callable, Coroutine, Optional
 
 from loguru import logger
 
+from iflow_bot.config.loader import DEFAULT_TIMEOUT
+
 
 def _is_windows() -> bool:
     """检查是否为 Windows 平台。"""
@@ -112,7 +114,7 @@ class StdioACPClient:
         self,
         iflow_path: str = "iflow",
         workspace: Optional[Path] = None,
-        timeout: int = 300,
+        timeout: int = DEFAULT_TIMEOUT,
     ):
         self.iflow_path = iflow_path
         self.workspace = workspace or Path.cwd()
@@ -706,7 +708,7 @@ class StdioACPAdapter:
         self,
         iflow_path: str = "iflow",
         workspace: Optional[Path] = None,
-        timeout: int = 300,
+        timeout: int = DEFAULT_TIMEOUT,
         default_model: str = "glm-5",
         thinking: bool = False,
         active_compress_trigger_tokens: int = 88888,

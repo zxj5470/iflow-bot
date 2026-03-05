@@ -9,8 +9,9 @@ from loguru import logger
 
 from iflow_bot.config.schema import Config
 
-LEGACY_DEFAULT_TIMEOUT = 300
-NEW_DEFAULT_TIMEOUT = 180
+# 统一的超时常量定义
+DEFAULT_TIMEOUT = 180  # 默认超时时间（秒）
+LEGACY_DEFAULT_TIMEOUT = 300  # 旧版默认值，用于迁移检测
 
 
 def get_config_dir() -> Path:
@@ -60,7 +61,7 @@ def load_config(config_path: Optional[Path] = None, auto_create: bool = True) ->
             if migrated:
                 _save_raw_config_data(data, config_path)
                 logger.info(
-                    f"Migrated config timeout to {NEW_DEFAULT_TIMEOUT}s for existing install: {config_path}"
+                    f"Migrated config timeout to {DEFAULT_TIMEOUT}s for existing install: {config_path}"
                 )
             config = Config(**data)
             logger.info(f"Loaded config from {config_path}")
@@ -82,8 +83,8 @@ def _migrate_legacy_driver_timeout(data: dict) -> tuple[dict, bool]:
     """Migrate legacy default timeout to new default for upgraded users.
 
     Rules:
-    - If `driver.timeout` is missing, set it to NEW_DEFAULT_TIMEOUT.
-    - If `driver.timeout` equals legacy default 300 (int or string), set to NEW_DEFAULT_TIMEOUT.
+    - If `driver.timeout` is missing, set it to DEFAULT_TIMEOUT.
+    - If `driver.timeout` equals legacy default 300 (int or string), set to DEFAULT_TIMEOUT.
     - Keep all other custom timeout values unchanged.
     """
     migrated = False
@@ -93,10 +94,10 @@ def _migrate_legacy_driver_timeout(data: dict) -> tuple[dict, bool]:
 
     timeout = driver.get("timeout")
     if timeout is None:
-        driver["timeout"] = NEW_DEFAULT_TIMEOUT
+        driver["timeout"] = DEFAULT_TIMEOUT
         migrated = True
     elif timeout == LEGACY_DEFAULT_TIMEOUT or timeout == str(LEGACY_DEFAULT_TIMEOUT):
-        driver["timeout"] = NEW_DEFAULT_TIMEOUT
+        driver["timeout"] = DEFAULT_TIMEOUT
         migrated = True
 
     return data, migrated
@@ -122,7 +123,7 @@ def _create_default_config(config_path: Path) -> None:
             "yolo": True,
             "thinking": False,
             "max_turns": 40,
-            "timeout": 180,
+            "timeout": DEFAULT_TIMEOUT,
             "compression_trigger_tokens": 88888,
             "workspace": str(Path.home() / ".iflow-bot" / "workspace"),
             "extra_args": []

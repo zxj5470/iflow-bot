@@ -8,6 +8,12 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 
+# 导入统一的超时常量，避免循环导入问题
+def _get_default_timeout() -> int:
+    """延迟导入避免循环依赖。"""
+    from iflow_bot.config.loader import DEFAULT_TIMEOUT
+    return DEFAULT_TIMEOUT
+
 
 # ============================================================================
 # 渠道配置
@@ -164,7 +170,7 @@ class DriverConfig(BaseModel):
     yolo: bool = True
     thinking: bool = False
     max_turns: int = 40
-    timeout: int = 180
+    timeout: int = Field(default_factory=_get_default_timeout)
     compression_trigger_tokens: int = 88888
     """活跃会话自动压缩触发阈值（估算 token）"""
     workspace: str = ""  # 关键：iflow 工作目录
@@ -236,4 +242,4 @@ class Config(BaseSettings):
         """获取超时时间。"""
         if self.driver and self.driver.timeout:
             return self.driver.timeout
-        return 180
+        return _get_default_timeout()
