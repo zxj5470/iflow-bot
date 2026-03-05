@@ -106,6 +106,7 @@ class StdioACPClient:
     """
     
     PROTOCOL_VERSION = 1
+    LINE_LIMIT = 10 * 1024 * 1024  # 10MB - readline 最大行长度，防止大 JSON 被截断
     
     def __init__(
         self,
@@ -161,6 +162,12 @@ class StdioACPClient:
                 )
             
             self._started = True
+            
+            # 设置 StreamReader 的 limit，防止大 JSON 行被截断
+            if self._process.stdout:
+                self._process.stdout._limit = self.LINE_LIMIT
+            if self._process.stderr:
+                self._process.stderr._limit = self.LINE_LIMIT
             
             self._receive_task = asyncio.create_task(self._receive_loop())
             self._stderr_receive_task = asyncio.create_task(self._stderr_receive_loop())
