@@ -236,4 +236,4 @@ class Config(BaseSettings):
         """获取超时时间。"""
         if self.driver and self.driver.timeout:
             return self.driver.timeout
-        return 1200
+        return 180
