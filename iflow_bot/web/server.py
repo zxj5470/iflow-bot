@@ -186,7 +186,6 @@ def _process_exists(pid: int) -> bool:
                 capture_output=True,
                 text=True,
                 timeout=3,
-                shell=True,
             )
             return str(pid) in result.stdout
         except Exception:

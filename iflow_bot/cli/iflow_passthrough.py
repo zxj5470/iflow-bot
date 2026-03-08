@@ -55,17 +55,10 @@ def create_passthrough_app():
 def _run_iflow(args: List[str]) -> int:
     """执行 iflow 命令并返回退出码"""
     cmd = ["iflow"] + args
-    if _is_windows():
-        cmd_str = " ".join(f'"{c}"' if " " in c else c for c in cmd)
-        result = subprocess.run(cmd_str, shell=True)
-    else:
-        result = subprocess.run(cmd)
+    result = subprocess.run(cmd)
     return result.returncode
 
 
 def run_iflow_interactive() -> None:
     """运行 iflow 交互模式"""
-    if _is_windows():
-        subprocess.run("iflow", shell=True)
-    else:
-        subprocess.run(["iflow"])
+    subprocess.run(["iflow"])

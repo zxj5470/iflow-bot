@@ -47,9 +47,6 @@ iflow-bot depends on iflow CLI. Please install it first:
 ```bash
 # With Node.js 22+
 npm i -g @iflow-ai/iflow-cli@latest
-
-# Or via curl
-bash -c "$(curl -fsSL https://gitee.com/iflow-ai/iflow-cli/raw/main/install.sh)"
 ```
 
 ### 2. Login to iflow

@@ -7,12 +7,11 @@ FROM python:3.12-slim
 
 # Install system dependencies + Node.js 22
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
     ca-certificates \
     git \
     tini \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
+    nodejs \
+    npm \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Verify Node.js
@@ -34,9 +33,8 @@ COPY iflow_bot/ ./iflow_bot/
 # Install Python package and dependencies into system environment
 RUN uv pip install --system --no-cache .
 
-# Copy entrypoint script
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Copy Python entrypoint
+COPY docker_entrypoint.py /docker_entrypoint.py
 
 # Create necessary directories
 RUN mkdir -p /root/.iflow-bot/workspace \
@@ -57,5 +55,5 @@ HEALTHCHECK --interval=60s --timeout=15s --start-period=30s --retries=3 \
     CMD iflow-bot status || exit 1
 
 # Use tini as PID 1 for proper signal handling
-ENTRYPOINT ["tini", "--", "/entrypoint.sh"]
+ENTRYPOINT ["tini", "--", "python", "/docker_entrypoint.py"]
 CMD ["gateway", "run"]

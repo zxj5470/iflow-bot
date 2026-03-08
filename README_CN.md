@@ -47,9 +47,6 @@ iflow-bot 依赖 iflow CLI 运行，请先安装：
 ```bash
 # 已有Node.js 22+
 npm i -g @iflow-ai/iflow-cli@latest
-
-# curl 方式
-bash -c "$(curl -fsSL https://gitee.com/iflow-ai/iflow-cli/raw/main/install.sh)"
 ```
 
 ### 2. 登录 iflow

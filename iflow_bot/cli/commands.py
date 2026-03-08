@@ -109,7 +109,6 @@ def process_exists(pid: int) -> bool:
                 capture_output=True,
                 text=True,
                 timeout=5,
-                shell=True,
             )
             return str(pid) in result.stdout
         except Exception:
@@ -161,7 +160,6 @@ def _ensure_windows_npm_path() -> None:
             capture_output=True,
             text=True,
             timeout=10,
-            shell=True,
         )
         npm_global_root = result.stdout.strip()
         if npm_global_root:
@@ -197,8 +195,6 @@ def check_iflow_installed() -> bool:
             "text": True,
             "timeout": 10,
         }
-        if is_windows():
-            kwargs["shell"] = True
         result = subprocess.run(["iflow", "--version"], **kwargs)
         if result.returncode == 0:
             return True
@@ -235,8 +231,6 @@ def check_iflow_logged_in() -> bool:
             "text": True,
             "timeout": 10,
         }
-        if is_windows():
-            kwargs["shell"] = True
         result = subprocess.run(["iflow", "-p", "test"], **kwargs)
         # 如果返回 "Please login first" 或类似提示，说明未登录
         output = result.stdout + result.stderr
@@ -274,12 +268,16 @@ def ensure_iflow_ready() -> bool:
     console.print("[yellow]iflow 未安装，正在自动安装...[/yellow]")
     console.print()
 
-    if system == "windows":
-        console.print("[cyan]自动安装依赖中...[/cyan]")
-        install_cmd = "npm install -g @iflow-ai/iflow-cli@latest"
-        result = subprocess.run(install_cmd, shell=True)
+    install_cmd = ["npm", "install", "-g", "@iflow-ai/iflow-cli@latest"]
 
-        if result.returncode != 0:
+    console.print("[cyan]自动安装依赖中...[/cyan]")
+    try:
+        result = subprocess.run(install_cmd)
+    except FileNotFoundError:
+        result = None
+
+    if result is None or result.returncode != 0:
+        if system == "windows":
             console.print("[red]自动安装失败，请手动执行以下步骤:[/red]")
             console.print()
             console.print("  1. 访问 https://nodejs.org/zh-cn/download 下载最新的 Node.js 安装程序")
@@ -287,20 +285,10 @@ def ensure_iflow_ready() -> bool:
             console.print("  3. 重启终端：CMD(Windows + r 输入cmd) 或 PowerShell")
             console.print("  4. 运行 [cyan]npm install -g @iflow-ai/iflow-cli@latest[/cyan] 来安装 iFlow CLI")
             console.print("  5. 运行 [cyan]iflow[/cyan] 来启动 iFlow CLI")
-            return False
-    else:
-        console.print("[cyan]自动安装依赖中...[/cyan]")
-        install_cmd = 'bash -c "$(curl -fsSL https://gitee.com/iflow-ai/iflow-cli/raw/main/install.sh)"'
-        result = subprocess.run(install_cmd, shell=True)
-        if result.returncode != 0:
-            console.print("[yellow]一键安装失败，尝试使用 npm 安装...[/yellow]")
-            install_cmd = "npm i -g @iflow-ai/iflow-cli@latest"
-            result = subprocess.run(install_cmd, shell=True)
-
-            if result.returncode != 0:
-                console.print("[red]自动安装失败，请手动执行以下命令:[/red]")
-                console.print(f"  [cyan]{install_cmd}[/cyan]")
-                return False
+        else:
+            console.print("[red]自动安装失败，请先确保 Node.js 与 npm 可用，然后手动执行以下命令:[/red]")
+            console.print("  [cyan]npm install -g @iflow-ai/iflow-cli@latest[/cyan]")
+        return False
 
     # 安装后再次刷新 PATH 并检查
     _ensure_windows_npm_path()
