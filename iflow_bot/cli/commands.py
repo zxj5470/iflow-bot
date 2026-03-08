@@ -489,12 +489,77 @@ def gateway_callback():
     pass
 
 
+def check_mcp_proxy_running(port: int = 8888) -> bool:
+    """检查 MCP 代理是否运行。"""
+    import socket
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        result = sock.connect_ex(('localhost', port))
+        sock.close()
+        return result == 0
+    except Exception:
+        return False
+
+
+def start_mcp_proxy(port: int = 8888) -> bool:
+    """启动 MCP 代理服务器。"""
+    import subprocess
+    try:
+        script_path = Path(__file__).parent.parent.parent / "scripts" / "start_mcp_proxy.sh"
+        if not script_path.exists():
+            console.print(f"[yellow]MCP 代理启动脚本不存在: {script_path}[/yellow]")
+            return False
+        
+        process = subprocess.Popen(
+            ["bash", str(script_path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        
+        # 等待服务启动
+        import asyncio
+        async def wait_for_proxy():
+            for _ in range(10):
+                if check_mcp_proxy_running(port):
+                    return True
+                await asyncio.sleep(1)
+            return False
+        
+        return asyncio.run(wait_for_proxy())
+    except Exception as e:
+        console.print(f"[yellow]启动 MCP 代理失败: {e}[/yellow]")
+        return False
+
+
 @gateway_app.command("start")
 def gateway_start(
     daemon: bool = typer.Option(True, "--daemon/--no-daemon", "-d/-D", help="后台运行"),
+    with_mcp: Optional[bool] = typer.Option(None, "--with-mcp/--without-mcp", help="是否启动 MCP 代理（覆盖配置文件）"),
 ) -> None:
     """后台启动 Gateway 服务。"""
     print_banner()
+
+    # 加载配置
+    config = load_config()
+    
+    # 检查并启动 MCP 代理
+    # 优先级：命令行参数 > 配置文件
+    should_start_mcp = with_mcp if with_mcp is not None else (
+        config.driver.mcp_proxy_auto_start if hasattr(config, "driver") and config.driver else True
+    )
+    
+    if should_start_mcp and config.driver.mcp_proxy_enabled:
+        mcp_port = config.driver.mcp_proxy_port
+        if not check_mcp_proxy_running(mcp_port):
+            console.print(f"[cyan]正在启动 MCP 代理 (端口: {mcp_port})...[/cyan]")
+            if start_mcp_proxy(mcp_port):
+                console.print(f"[green]{_OK_MARK}[/green] MCP 代理已启动")
+            else:
+                console.print(f"[yellow]MCP 代理启动失败，将继续运行网关[/yellow]")
+        else:
+            console.print(f"[green]{_OK_MARK}[/green] MCP 代理已在运行 (端口: {mcp_port})")
+        console.print()
 
     # 检查 iflow 是否就绪
     if not ensure_iflow_ready():
@@ -763,6 +828,31 @@ async def _run_gateway(config, verbose: bool = False) -> None:
             getattr(config.driver, "compression_trigger_tokens", 88888)
             if hasattr(config, "driver") and config.driver
             else 88888
+        ),
+        mcp_proxy_port=(
+            getattr(config.driver, "mcp_proxy_port", 8888)
+            if hasattr(config, "driver") and config.driver
+            else 8888
+        ),
+        mcp_servers_auto_discover=(
+            getattr(config.driver, "mcp_servers_auto_discover", True)
+            if hasattr(config, "driver") and config.driver
+            else True
+        ),
+        mcp_servers_max=(
+            getattr(config.driver, "mcp_servers_max", 10)
+            if hasattr(config, "driver") and config.driver
+            else 10
+        ),
+        mcp_servers_allowlist=(
+            getattr(config.driver, "mcp_servers_allowlist", None)
+            if hasattr(config, "driver") and config.driver
+            else None
+        ),
+        mcp_servers_blocklist=(
+            getattr(config.driver, "mcp_servers_blocklist", None)
+            if hasattr(config, "driver") and config.driver
+            else None
         ),
     )
     
@@ -1065,6 +1155,21 @@ def sessions(
             getattr(config.driver, "compression_trigger_tokens", 88888)
             if hasattr(config, "driver") and config.driver
             else 88888
+        ),
+        mcp_proxy_port=(
+            getattr(config.driver, "mcp_proxy_port", 8888)
+            if hasattr(config, "driver") and config.driver
+            else 8888
+        ),
+        mcp_servers_auto_discover=(
+            getattr(config.driver, "mcp_servers_auto_discover", True)
+            if hasattr(config, "driver") and config.driver
+            else True
+        ),
+        mcp_servers_max=(
+            getattr(config.driver, "mcp_servers_max", 10)
+            if hasattr(config, "driver") and config.driver
+            else 10
         ),
     )
     mappings = adapter.session_mappings
@@ -1534,3 +1639,28 @@ def cron_run(
 
 if __name__ == "__main__":
     app()
+
+
+# ============================================================================
+# MCP 配置同步
+# ============================================================================
+
+@app.command()
+def mcp_sync(
+    overwrite: bool = typer.Option(False, "--overwrite", "-o", help="覆盖现有配置"),
+) -> None:
+    """从 iflow CLI 同步 MCP 服务器配置。
+
+    读取 iflow 的 settings.json，将 MCP 服务器配置复制到 iflow-bot。
+    配置会被保存到 ~/.iflow-bot/config/.mcp_proxy_config.json
+    """
+    from iflow_bot.utils.helpers import sync_mcp_from_iflow
+
+    console.print("[cyan]正在从 iflow CLI 同步 MCP 配置...[/cyan]")
+
+    if sync_mcp_from_iflow(overwrite=overwrite):
+        console.print(f"[green]{_OK_MARK}[/green] MCP 配置同步成功")
+        console.print("[dim]配置文件：~/.iflow-bot/config/.mcp_proxy_config.json[/dim]")
+        console.print("[dim]重启网关使配置生效：iflow-bot gateway restart[/dim]")
+    else:
+        console.print("[yellow]MCP 配置同步失败或无需同步[/yellow]")
