@@ -8,6 +8,10 @@ All notable changes to this project will be documented in this file.
 - test(resilience): Add end-to-end resilience coverage for outbound-queue overflow behavior, per-user loop serialization, and Feishu streaming failure-path log classification.
 - test(concurrency-observability): Add chain-level assertions for cross-user parallel handling and streaming trace metadata consistency (`reply_to_id` on progress/end path).
 
+## v0.3.8 - 2026-03-11
+
+- fix(config): Raise default driver timeout to 600s for new installs and migrated configs.
+
 ## v0.3.6 - 2026-03-10
 
 - fix(streaming): Use final response content when no stream chunks were emitted to avoid false empty-output fallback.
