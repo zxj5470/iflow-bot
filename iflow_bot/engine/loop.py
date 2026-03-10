@@ -510,6 +510,23 @@ time: {now}
                                 metadata={"reply_to_id": msg.metadata.get("message_id")},
                             ))
 
+            if not effective_content:
+                logger.warning(
+                    f"Streaming produced empty output for {msg.channel}:{msg.chat_id}, retrying non-stream chat"
+                )
+                try:
+                    fallback_response = await self.adapter.chat(
+                        message=message_content,
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        model=self.model,
+                    )
+                    effective_content = (fallback_response or "").strip()
+                except Exception as e:
+                    logger.warning(
+                        f"Non-stream retry failed for {msg.channel}:{msg.chat_id}: {e}"
+                    )
+
             if effective_content:
                 # 🆕 流式结束后，也用 ResultAnalyzer 分析并附加检测到的文件
                 analysis = result_analyzer.analyze({"output": effective_content, "success": True})
@@ -552,6 +569,23 @@ time: {now}
                             "reply_to_id": msg.metadata.get("message_id"),
                         },
                     ))
+                elif qq_channel and not final_content:
+                    # QQ：流式无内容时，补发非流式结果
+                    await qq_channel.send(OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=effective_content,
+                        metadata={"reply_to_id": msg.metadata.get("message_id")},
+                    ))
+                    from iflow_bot.session.recorder import get_recorder
+                    recorder = get_recorder()
+                    if recorder:
+                        recorder.record_outbound(OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content=effective_content,
+                            metadata={"reply_to_id": msg.metadata.get("message_id")},
+                        ))
                 logger.info(f"Streaming response completed for {msg.channel}:{msg.chat_id}")
             else:
                 fallback = (
