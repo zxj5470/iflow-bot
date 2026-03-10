@@ -8,6 +8,10 @@ All notable changes to this project will be documented in this file.
 - test(resilience): Add end-to-end resilience coverage for outbound-queue overflow behavior, per-user loop serialization, and Feishu streaming failure-path log classification.
 - test(concurrency-observability): Add chain-level assertions for cross-user parallel handling and streaming trace metadata consistency (`reply_to_id` on progress/end path).
 
+## v0.3.6 - 2026-03-10
+
+- fix(streaming): Use final response content when no stream chunks were emitted to avoid false empty-output fallback.
+
 ## v0.3.5 - 2026-03-09
 
 - refactor(cross-platform): Remove shell-script runtime paths in favor of Python-managed startup/test entrypoints, including Docker entrypoint migration and MCP proxy script cleanup.
@@ -28,4 +32,3 @@ All notable changes to this project will be documented in this file.
 - fix(cli): Resolve version from installed package metadata first to avoid `v0.0.0` on Windows/installed runs.
 - fix(stdio-acp): Keep receive loop alive on oversized chunks (`Separator is not found, and chunk exceed the limit`), avoiding unexpected gateway exit on Windows.
 - fix(cli): Add console symbol fallback for non-Unicode terminals (GBK/Windows), preventing startup crashes caused by `UnicodeEncodeError`.
-
