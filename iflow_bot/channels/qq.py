@@ -6,9 +6,12 @@
 
 import asyncio
 import logging
+import time
 from collections import deque
 from pathlib import Path
 from typing import Any, Optional, TYPE_CHECKING
+
+import aiohttp
 
 from iflow_bot.bus.events import OutboundMessage
 from iflow_bot.bus.queue import MessageBus
@@ -31,6 +34,47 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_image_urls(attachments: Any) -> list[str]:
+    urls: list[str] = []
+    if not attachments:
+        return urls
+    for attachment in attachments:
+        content_type = getattr(attachment, "content_type", "") or ""
+        url = getattr(attachment, "url", "") or ""
+        if content_type.startswith("image/") and url:
+            urls.append(url)
+    return urls
+
+
+async def _download_image(url: str, save_dir: Path) -> Optional[str]:
+    try:
+        save_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"image_{int(time.time() * 1000)}.png"
+        filepath = save_dir / filename
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as response:
+                if response.status != 200:
+                    logger.warning(f"[QQ] Failed to download image: HTTP {response.status}")
+                    return None
+                with open(filepath, "wb") as f:
+                    async for chunk in response.content.iter_chunked(8192):
+                        f.write(chunk)
+        logger.info(f"[QQ] Image downloaded: {filepath}")
+        return str(filepath)
+    except Exception as e:
+        logger.error(f"[QQ] Error downloading image: {e}")
+        return None
+
+
+def _append_image_prompt(content: str, image_path: str) -> str:
+    prompt = (
+        "\n\n[用户发送了图片，路径: "
+        f"{image_path}"
+        "。请用简洁自然的语言描述图片内容，1-2句话概括即可，就像朋友聊天一样。]"
+    )
+    return f"{content}{prompt}" if content else prompt.strip()
 
 
 def _make_bot_class(channel: "QQChannel") -> Any:
@@ -309,8 +353,20 @@ class QQChannel(BaseChannel):
 
             # 提取消息内容
             content = (data.content or "").strip()
+
+            # 提取图片并下载
+            attachments = getattr(data, "attachments", None)
+            image_urls = _extract_image_urls(attachments)
+            if image_urls:
+                image_path = await _download_image(
+                    image_urls[0],
+                    Path.home() / ".iflow-bot" / "workspace" / "images",
+                )
+                if image_path:
+                    content = _append_image_prompt(content, image_path)
+
             if not content:
-                return
+                content = "[发送了图片]"
 
             # 先发送 "Thinking..." 提示（非阻塞，不影响主流程）
             try:
@@ -362,15 +418,24 @@ class QQChannel(BaseChannel):
 
             # 提取消息内容
             content = (data.content or "").strip()
-            if not content:
-                return
 
             # 移除 @机器人 的部分
             bot_id = getattr(self._client.robot, 'id', '') if self._client else ''
             if bot_id:
                 content = content.replace(f'<@!{bot_id}>', '').strip()
+            # 提取图片并下载
+            attachments = getattr(data, "attachments", None)
+            image_urls = _extract_image_urls(attachments)
+            if image_urls:
+                image_path = await _download_image(
+                    image_urls[0],
+                    Path.home() / ".iflow-bot" / "workspace" / "images",
+                )
+                if image_path:
+                    content = _append_image_prompt(content, image_path)
+
             if not content:
-                return
+                content = "[发送了图片]"
 
             # 发送 "Thinking..." 提示（被动回复模式）
             try:
