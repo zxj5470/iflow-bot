@@ -92,6 +92,244 @@ class AgentLoop:
                 pass
         return "✨ New conversation started, previous context has been cleared."
 
+    async def _send_command_reply(self, msg: InboundMessage, content: str) -> None:
+        await self.bus.publish_outbound(OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=content,
+            metadata=self._build_reply_metadata(msg),
+        ))
+
+    def _build_help_text(self) -> str:
+        return (
+            "可用命令：\n"
+            "/status  查看当前状态\n"
+            "/new     开启新会话\n"
+            "/compact 手动压缩会话\n"
+            "/model set <name>  修改模型\n"
+            "/cron list | /cron add | /cron delete <id>\n"
+            "/skills <args>  透传 npx skills\n"
+            "/language <en-US|zh-CN>  设置语言\n"
+            "/help    查看帮助\n"
+        )
+
+    async def _handle_slash_command(self, msg: InboundMessage) -> bool:
+        import shlex
+        from datetime import datetime
+        from iflow_bot.config.loader import load_config, save_config
+        from iflow_bot.cron.service import CronService
+        from iflow_bot.cron.types import CronSchedule
+        from iflow_bot.utils.platform import prepare_subprocess_command
+
+        raw = (msg.content or "").strip()
+        if not raw.startswith("/"):
+            return False
+
+        try:
+            parts = shlex.split(raw)
+        except Exception:
+            parts = raw.split()
+
+        if not parts:
+            return False
+
+        cmd = parts[0].lower()
+        args = parts[1:]
+
+        if cmd in {"/help"}:
+            await self._send_command_reply(msg, self._build_help_text())
+            return True
+
+        if cmd in {"/new", "/start"}:
+            return False
+
+        if cmd == "/status":
+            adapter = self.adapter
+            mode = getattr(adapter, "mode", "cli")
+            model = self.model
+            workspace = str(self.workspace) if self.workspace else "unknown"
+            streaming = "on" if self.streaming else "off"
+            compression_count = "-"
+            session_id = "-"
+            est_tokens = "-"
+
+            try:
+                if mode == "stdio":
+                    stdio = await adapter._get_stdio_adapter()
+                    info = stdio.get_session_status(msg.channel, msg.chat_id)
+                    compression_count = str(info.get("compression_count", "-"))
+                    session_id = info.get("session_id", "-")
+                    est_tokens = info.get("estimated_tokens", "-")
+            except Exception:
+                pass
+
+            await self._send_command_reply(
+                msg,
+                "\n".join([
+                    f"状态: {mode}",
+                    f"模型: {model}",
+                    f"流式: {streaming}",
+                    f"workspace: {workspace}",
+                    f"session: {session_id}",
+                    f"上下文估算(tokens): {est_tokens}",
+                    f"压缩次数: {compression_count}",
+                ]),
+            )
+            return True
+
+        if cmd == "/compact":
+            try:
+                if getattr(self.adapter, "mode", "cli") == "stdio":
+                    stdio = await self.adapter._get_stdio_adapter()
+                    ok, reason = await stdio.compact_session(msg.channel, msg.chat_id)
+                    if ok:
+                        await self._send_command_reply(msg, "✅ 已触发会话压缩")
+                    else:
+                        await self._send_command_reply(msg, f"⚠️ 无法压缩：{reason}")
+                else:
+                    await self._send_command_reply(msg, "⚠️ 当前模式不支持手动压缩")
+            except Exception as e:
+                await self._send_command_reply(msg, f"❌ 压缩失败: {e}")
+            return True
+
+        if cmd == "/model" and len(args) >= 2 and args[0].lower() == "set":
+            new_model = args[1]
+            cfg = load_config()
+            if hasattr(cfg, "driver") and cfg.driver:
+                cfg.driver.model = new_model
+            save_config(cfg)
+            self.model = new_model
+            try:
+                self.adapter.default_model = new_model
+                if getattr(self.adapter, "_stdio_adapter", None):
+                    self.adapter._stdio_adapter.default_model = new_model
+            except Exception:
+                pass
+            await self._send_command_reply(msg, f"✅ 已切换模型为 {new_model}（新会话生效）")
+            return True
+
+        if cmd == "/cron":
+            from iflow_bot.utils.helpers import get_data_dir
+            store_path = get_data_dir() / "cron" / "jobs.json"
+            cron = CronService(store_path)
+            sub = (args[0].lower() if args else "help")
+
+            if sub == "list":
+                jobs = cron.list_jobs(include_disabled=True)
+                if not jobs:
+                    await self._send_command_reply(msg, "暂无定时任务")
+                else:
+                    lines = []
+                    for job in jobs:
+                        sched = job.schedule.kind
+                        if sched == "every":
+                            sched = f"every {int(job.schedule.every_ms/1000)}s"
+                        elif sched == "cron":
+                            sched = f"cron {job.schedule.expr}"
+                        elif sched == "at":
+                            ts = job.schedule.at_ms / 1000 if job.schedule.at_ms else 0
+                            sched = f"at {datetime.fromtimestamp(ts).isoformat(sep=' ')}"
+                        lines.append(f"{job.id} | {job.name} | {sched} | enabled={job.enabled}")
+                    await self._send_command_reply(msg, "定时任务：\n" + "\n".join(lines))
+                return True
+
+            if sub == "delete" and len(args) >= 2:
+                job_id = args[1]
+                removed = cron.remove_job(job_id)
+                await self._send_command_reply(msg, "✅ 已删除" if removed else "⚠️ 未找到该任务")
+                return True
+
+            if sub == "add":
+                # 简易参数解析：--name/--message/--every/--cron/--at/--tz/--channel/--to/--deliver
+                opts = {}
+                key = None
+                for token in args[1:]:
+                    if token.startswith("--"):
+                        key = token[2:]
+                        opts[key] = ""
+                    else:
+                        if key:
+                            if opts[key]:
+                                opts[key] += " " + token
+                            else:
+                                opts[key] = token
+                name = opts.get("name", "cron")
+                message = opts.get("message")
+                if not message:
+                    await self._send_command_reply(msg, "⚠️ 缺少 --message")
+                    return True
+                tz = opts.get("tz")
+                every = opts.get("every")
+                cron_expr = opts.get("cron")
+                at = opts.get("at")
+                if sum(1 for x in [every, cron_expr, at] if x) != 1:
+                    await self._send_command_reply(msg, "⚠️ 需要指定 --every 或 --cron 或 --at 其中之一")
+                    return True
+                if every:
+                    schedule = CronSchedule(kind="every", every_ms=int(every) * 1000)
+                elif cron_expr:
+                    schedule = CronSchedule(kind="cron", expr=cron_expr, tz=tz)
+                else:
+                    when = datetime.fromisoformat(at)
+                    schedule = CronSchedule(kind="at", at_ms=int(when.timestamp() * 1000))
+                job = cron.add_job(
+                    name=name,
+                    schedule=schedule,
+                    message=message,
+                    deliver=opts.get("deliver", "").lower() in {"1", "true", "yes"},
+                    channel=opts.get("channel"),
+                    to=opts.get("to"),
+                    delete_after_run=False,
+                )
+                await self._send_command_reply(msg, f"✅ 已添加任务 {job.id}")
+                return True
+
+            await self._send_command_reply(
+                msg,
+                "用法：/cron list | /cron add --name xxx --message xxx --every 60 | /cron delete <id>",
+            )
+            return True
+
+        if cmd == "/skills":
+            try:
+                cmdline = ["npx", "skills"] + args
+                prepared = prepare_subprocess_command(cmdline)
+                proc = await asyncio.create_subprocess_exec(
+                    *prepared,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=str(self.workspace),
+                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+                output = (stdout or b"").decode("utf-8", errors="replace").strip()
+                err = (stderr or b"").decode("utf-8", errors="replace").strip()
+                text = output or err or "无输出"
+                if len(text) > 4000:
+                    text = text[:4000] + "\n... (truncated)"
+                await self._send_command_reply(msg, text)
+            except Exception as e:
+                await self._send_command_reply(msg, f"❌ skills 执行失败: {e}")
+            return True
+
+        if cmd == "/language" and args:
+            lang = args[0]
+            settings_path = self.workspace / ".iflow" / "settings.json"
+            try:
+                if settings_path.exists():
+                    import json
+                    data = json.loads(settings_path.read_text(encoding="utf-8"))
+                else:
+                    data = {}
+                data["language"] = lang
+                settings_path.parent.mkdir(parents=True, exist_ok=True)
+                settings_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+                await self._send_command_reply(msg, f"✅ 已设置 language = {lang}")
+            except Exception as e:
+                await self._send_command_reply(msg, f"❌ 设置语言失败: {e}")
+            return True
+
+        return False
+
     def _get_bootstrap_content(self) -> tuple[Optional[str], bool]:
         """读取引导内容。
         
@@ -296,6 +534,10 @@ time: {now}
                         chat_id=msg.chat_id,
                         content=self._get_new_conversation_message(),
                     ))
+                    return
+
+                # 处理斜杠命令
+                if await self._handle_slash_command(msg):
                     return
 
                 # 准备消息内容

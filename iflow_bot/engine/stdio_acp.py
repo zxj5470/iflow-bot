@@ -820,6 +820,7 @@ class StdioACPAdapter:
         self._session_map: dict[str, str] = {}
         self._loaded_sessions: set[str] = set()
         self._rehydrate_history: dict[str, str] = {}
+        self._compression_count = 0
         self._memory_constraints_cache: Optional[str] = None
         self._active_compress_trigger_tokens = max(0, int(active_compress_trigger_tokens))
         self._active_compress_budget_tokens = 2200
@@ -1067,6 +1068,44 @@ TOOLS.md - Your Tools（你的工具）定义了你可以使用的工具列表�
     
     def _get_session_key(self, channel: str, chat_id: str) -> str:
         return f"{channel}:{chat_id}"
+
+    def get_session_status(self, channel: str, chat_id: str) -> dict:
+        key = self._get_session_key(channel, chat_id)
+        session_id = self._session_map.get(key)
+        estimated_tokens = "-"
+        try:
+            if session_id:
+                history = self._extract_conversation_history(session_id) or ""
+                if history:
+                    estimated_tokens = self._estimate_tokens(history)
+        except Exception:
+            pass
+        return {
+            "session_id": session_id or "-",
+            "estimated_tokens": estimated_tokens,
+            "compression_count": getattr(self, "_compression_count", 0),
+        }
+
+    async def compact_session(self, channel: str, chat_id: str, model: Optional[str] = None) -> tuple[bool, str]:
+        key = self._get_session_key(channel, chat_id)
+        session_id = self._session_map.get(key)
+        if not session_id:
+            return False, "未找到会话"
+        history_context = self._extract_conversation_history(session_id) or ""
+        if not history_context:
+            return False, "无可压缩的上下文"
+        self._schedule_persist_compression_snapshot(
+            channel=channel,
+            chat_id=chat_id,
+            reason="manual_compact",
+            history_context=history_context,
+            estimated_tokens=self._estimate_tokens(history_context),
+        )
+        history_context = self._apply_compression_constraints(history_context, channel, chat_id)
+        await self._invalidate_session(key)
+        self._rehydrate_history[key] = history_context
+        await self._create_new_session(key, model)
+        return True, "ok"
 
     @staticmethod
     def _inject_history_before_user_message(message: str, history_context: str) -> str:
@@ -1346,6 +1385,10 @@ TOOLS.md - Your Tools（你的工具）定义了你可以使用的工具列表�
             if t.exception()
             else None
         )
+        try:
+            self._compression_count += 1
+        except Exception:
+            pass
 
     def _sync_todo_items(
         self,
